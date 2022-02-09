@@ -1,0 +1,136 @@
+options {
+    JAVA_UNICODE_ESCAPE = true;
+    FORCE_LA_CHECK = true;
+/* TO DEBUG ENABLE THESE
+    DEBUG_PARSER = true;
+    DEBUG_LOOKAHEAD = true;
+    DEBUG_TOKEN_MANAGER = true;
+*/
+}
+PARSER_BEGIN(JsonMathParser)
+package io.appform.jsonmath.parser;
+
+import com.google.common.collect.Lists;
+import io.appform.jsonmath.FunctionRegistry;import io.appform.jsonmath.JMUtils;
+import io.appform.jsonmath.tree.*;
+import io.appform.jsonmath.value.JMJsonField;import io.appform.jsonmath.value.JMNumber;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+
+@Slf4j
+public class JsonMathParser {
+    private FunctionRegistry functionRegistry;
+}
+PARSER_END(JsonMathParser)
+
+
+SKIP :  {" "}
+SKIP :  {"\n"|"\r"|"\r\n"}
+TOKEN : {<COMMA : ",">}
+TOKEN : {<OPEN_BRACKET : "(">}
+TOKEN : {<CLOSE_BRACKET : ")">}
+TOKEN : { <OPERATOR: ("+" | "-" | "*" | "/" | "%" | "^") >}
+TOKEN : { <#NUMLITERAL : (["0"-"9"])+|(["0"-"9"])+ "." (["0"-"9"])+ | (["0"-"9"])+ "." | "."(["0"-"9"])+>}
+TOKEN : { <NUMBER : (<NUMLITERAL>) | ("-" <NUMLITERAL>)>}
+TOKEN : { <SINGLEQUOTE : "'">}
+TOKEN : { <POINTER : <SINGLEQUOTE> "/" (~["'"])+ <SINGLEQUOTE>>}
+TOKEN : { <PATH : <SINGLEQUOTE> "$" (~["'"])+ <SINGLEQUOTE>>}
+TOKEN : {<ARRAY_START: "[">}
+TOKEN : {<ARRAY_END: "]">}
+TOKEN : {<FUNCTION_CALL : ["a"-"z", "A"-"Z"](["0"-"9", "a"-"z", "A"-"Z" , "_", "."])+>}
+
+JMTreeNode parse(FunctionRegistry functionRegistry): {
+    this.functionRegistry = functionRegistry;
+    JMTreeNode value = null;
+}
+{
+
+    value = BinaryOperation() {
+        return value;
+    }
+}
+
+JMTreeNode BinaryOperation(): {
+    JMTreeNode lhs = null;
+    JMTreeNode rhs = null;
+    JMTreeNode current = null;
+    Token operator = null;
+}
+{
+    lhs = Operand()
+    (
+        LOOKAHEAD(3)
+        operator = <OPERATOR>
+        (rhs = BinaryOperation() ) {
+            current = JMUtils.node(OperatorType.from(operator.image), null == current ? lhs : current, rhs);
+        }
+    )*
+    {
+        return null == current ? lhs : current;
+    }
+}
+
+
+
+JMTreeNode BracketRepr(): {
+    JMTreeNode value = null;
+}
+{
+    <OPEN_BRACKET> [value = BinaryOperation() ] <CLOSE_BRACKET> { return new JMParenthesis(value); }
+}
+
+JMTreeNode FunctionRepr() : {
+    Token t = null;
+    List<JMTreeNode> params = Lists.newArrayList();
+    JMTreeNode value = null;
+}
+{
+    t = <FUNCTION_CALL> <OPEN_BRACKET>
+            (
+                value = Operand() { params.add(value); }
+            )?
+            (<COMMA>
+                value = Operand() { params.add(value); }
+            )*
+            <CLOSE_BRACKET>
+    {
+        return JMUtils.function(functionRegistry, t.image, params);
+    }
+}
+
+JMTreeNode Operand(): {
+    JMTreeNode result = null;
+}
+{
+    (result = JsonPointerRepr()
+     | result = JsonPathRepr()
+     | result = NumericRepr()
+     | result = FunctionRepr()
+     | result = BracketRepr()
+     )
+    {
+        return result;
+    }
+}
+
+JMTreeNode JsonPointerRepr() : {
+    Token t = null;
+}
+{
+    t = <POINTER> { return new JMJsonField(JMJsonField.Type.POINTER, t.image.replaceAll("^'|'$", "")); }
+}
+
+JMTreeNode JsonPathRepr() : {
+    Token t = null;
+}
+{
+    t = <PATH> { return new JMJsonField(JMJsonField.Type.PATH, t.image.replaceAll("^'|'$", "")); }
+}
+
+JMTreeNode NumericRepr() : {
+    Token t = null;
+}
+{
+    t = <NUMBER> { return new JMNumber(Double.parseDouble(t.image)); }
+}
